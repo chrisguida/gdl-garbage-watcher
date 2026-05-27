@@ -25,7 +25,6 @@
     font-size: 22px; line-height: 22px; text-align: center;
     text-shadow: 0 0 3px #fff, 0 0 2px #fff;
   }
-  .truck-icon.stopped { opacity: .5; filter: grayscale(.6); }
   .pin-icon { font-size: 22px; line-height: 22px; text-align: center; }
 </style>
 </head>
@@ -34,7 +33,7 @@
 <div id="panel">
   <h1>Guadalajara garbage trucks (live)</h1>
   <small id="status">loading…</small><br>
-  <small>🚛 = moving · faded = stopped · refresh 5 s</small><br>
+  <small>🚛 moving · 🗑️ stopped · refresh 5 s</small><br>
   <small id="watch-status">no watch pin · click map to set</small><br>
   <button id="clear-pin">clear pin</button>
 </div>
@@ -109,10 +108,13 @@ async function refresh() {
       const lat = parseFloat(t.lat), lng = parseFloat(t.lng);
       if (!isFinite(lat) || !isFinite(lng)) continue;
       const speed = parseFloat(t.current_speed) || 0;
-      const cls = speed > 0 ? 'moving' : 'stopped';
-      if (speed > 0) moving++; else stopped++;
+      const isMoving = speed > 0;
+      const cls = isMoving ? 'moving' : 'stopped';
+      if (isMoving) moving++; else stopped++;
+      const glyph = isMoving ? '🚛' : '🗑️';
+      const title = `#${t.vehicle_name} · ${isMoving ? 'moving' : 'stopped'}`;
       const icon = L.divIcon({
-        html: `<div class="truck-icon ${cls}" title="#${t.vehicle_name}">🚛</div>`,
+        html: `<div class="truck-icon ${cls}" title="${title}">${glyph}</div>`,
         className: '', iconSize: [22, 22]
       });
       const popup = `#${t.vehicle_name} · ${t.vehicle_plate}<br>` +
