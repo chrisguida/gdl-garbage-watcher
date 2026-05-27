@@ -1,0 +1,18 @@
+[Unit]
+Description=Guadalajara garbage-truck watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Replace YOURUSER with the unprivileged user that owns the install dir.
+User=YOURUSER
+Group=YOURUSER
+WorkingDirectory=/home/YOURUSER/gdl-garbage-watcher
+EnvironmentFile=/home/YOURUSER/gdl-garbage-watcher/.env
+ExecStart=/usr/bin/python3 /home/YOURUSER/gdl-garbage-watcher/watch_truck.py
+Type=simple
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

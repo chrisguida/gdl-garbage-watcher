@@ -29,3 +29,11 @@ Open http://localhost:8765/.
 3. Vercel detects `api/posiciones.js` automatically — no extra config needed.
 
 The static `index.html` is served at `/`; the proxy is at `/api/posiciones`.
+
+## Watcher (optional)
+
+If you want push notifications (ntfy and/or Telegram) when a truck enters a
+specific block, deploy the small Python watcher in [`watcher/`](watcher/) on a
+Linux box with systemd. It uses only the standard library, polls the same
+upstream feed, and pushes to whichever backends you've configured via env
+vars. See [`watcher/README.md`](watcher/README.md).
