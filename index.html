@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GDL garbage trucks — live</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  html, body { margin: 0; height: 100%; font: 13px/1.3 system-ui, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  #panel {
+    position: absolute; top: 10px; left: 56px; z-index: 1000;
+    background: rgba(255,255,255,.94); padding: 8px 10px; border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0,0,0,.2); max-width: 280px;
+  }
+  #panel h1 { font-size: 13px; margin: 0 0 4px; }
+  #panel small, #panel button { color: #333; font-size: 11px; }
+  #panel button {
+    margin-top: 4px; padding: 3px 7px; cursor: pointer;
+    background: #fff; border: 1px solid #bbb; border-radius: 4px;
+  }
+  #panel button:hover { background: #eee; }
+  .truck-icon {
+    font-size: 22px; line-height: 22px; text-align: center;
+    text-shadow: 0 0 3px #fff, 0 0 2px #fff;
+  }
+  .truck-icon.stopped { opacity: .5; filter: grayscale(.6); }
+  .pin-icon { font-size: 22px; line-height: 22px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h1>Guadalajara garbage trucks (live)</h1>
+  <small id="status">loading…</small><br>
+  <small>🚛 = moving · faded = stopped · refresh 5 s</small><br>
+  <small id="watch-status">no watch pin · click map to set</small><br>
+  <button id="clear-pin">clear pin</button>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const API = "/api/posiciones";
+const REFRESH_MS = 5000;
+const WATCH_RADIUS_M = 150;
+const STORE_KEY = "gdl-trash-watch-pin";
+
+const map = L.map('map').setView([20.676, -103.347], 13);  // Guadalajara
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '© OpenStreetMap'
+}).addTo(map);
+
+// ---- watch pin (localStorage-only) ----
+let pinMarker = null, pinCircle = null;
+function loadPin() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (Array.isArray(p) && p.length === 2 && isFinite(p[0]) && isFinite(p[1])) return p;
+  } catch (e) {}
+  return null;
+}
+function setPin(latlng) {
+  clearPin(false);
+  pinMarker = L.marker(latlng, {
+    icon: L.divIcon({ html: '📍', className: 'pin-icon', iconSize: [22, 22] })
+  }).addTo(map);
+  pinCircle = L.circle(latlng, {
+    radius: WATCH_RADIUS_M, color: '#d7263d', weight: 1, fillOpacity: .08
+  }).addTo(map);
+  localStorage.setItem(STORE_KEY, JSON.stringify([latlng.lat ?? latlng[0], latlng.lng ?? latlng[1]]));
+  document.getElementById('watch-status').textContent =
+    `watching ${WATCH_RADIUS_M}m around your pin`;
+}
+function clearPin(persist = true) {
+  if (pinMarker) { map.removeLayer(pinMarker); pinMarker = null; }
+  if (pinCircle) { map.removeLayer(pinCircle); pinCircle = null; }
+  if (persist) localStorage.removeItem(STORE_KEY);
+  document.getElementById('watch-status').textContent = 'no watch pin · click map to set';
+}
+map.on('click', (e) => setPin(e.latlng));
+document.getElementById('clear-pin').addEventListener('click', () => clearPin());
+const savedPin = loadPin();
+if (savedPin) setPin({ lat: savedPin[0], lng: savedPin[1] });
+
+// ---- trucks ----
+const markers = new Map();   // vehicle_id -> { marker, lastSeen, lastInside }
+
+function haversine_m(a, b) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b[0] - a[0]), dLon = toRad(b[1] - a[1]);
+  const h = Math.sin(dLat/2)**2 +
+            Math.cos(toRad(a[0]))*Math.cos(toRad(b[0]))*Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+async function refresh() {
+  try {
+    const r = await fetch(API, { cache: 'no-store' });
+    const data = await r.json();
+    const now = Date.now();
+    const trucks = data.posiciones || [];
+    const pin = loadPin();
+    let moving = 0, stopped = 0;
+    for (const t of trucks) {
+      const lat = parseFloat(t.lat), lng = parseFloat(t.lng);
+      if (!isFinite(lat) || !isFinite(lng)) continue;
+      const speed = parseFloat(t.current_speed) || 0;
+      const cls = speed > 0 ? 'moving' : 'stopped';
+      if (speed > 0) moving++; else stopped++;
+      const icon = L.divIcon({
+        html: `<div class="truck-icon ${cls}" title="#${t.vehicle_name}">🚛</div>`,
+        className: '', iconSize: [22, 22]
+      });
+      const popup = `#${t.vehicle_name} · ${t.vehicle_plate}<br>` +
+                    `speed ${speed} km/h<br>` +
+                    `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+      let m = markers.get(t.vehicle_id);
+      if (!m) {
+        m = {
+          marker: L.marker([lat, lng], { icon }).addTo(map).bindPopup(popup),
+          lastSeen: now, lastInside: false
+        };
+        markers.set(t.vehicle_id, m);
+      } else {
+        m.marker.setLatLng([lat, lng]);
+        m.marker.setIcon(icon);
+        m.marker.getPopup().setContent(popup);
+        m.lastSeen = now;
+      }
+      // Optional: in-browser notification when a truck enters the user's pin radius.
+      if (pin && Notification && Notification.permission === 'granted') {
+        const d = haversine_m(pin, [lat, lng]);
+        const inside = d <= WATCH_RADIUS_M;
+        if (inside && !m.lastInside) {
+          new Notification(`🚛 Truck #${t.vehicle_name} entered your block`, {
+            body: `${t.vehicle_plate} · ${speed} km/h · ${d.toFixed(0)}m from pin`
+          });
+        }
+        m.lastInside = inside;
+      }
+    }
+    for (const [id, m] of markers) {
+      if (m.lastSeen !== now) { map.removeLayer(m.marker); markers.delete(id); }
+    }
+    document.getElementById('status').textContent =
+      `${trucks.length} trucks · ${moving} moving · ${stopped} stopped · ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    document.getElementById('status').textContent = 'error: ' + e.message;
+  }
+}
+// Ask for notification permission once (only relevant if a pin is set).
+if (loadPin() && Notification && Notification.permission === 'default') {
+  Notification.requestPermission();
+}
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>
